@@ -1,3 +1,4 @@
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, str};
@@ -97,15 +98,22 @@ impl KernelSrc {
 
 		forward_features(&mut cargo);
 
+		fs::create_dir_all(&target_dir).unwrap();
+		let lock = File::create(target_dir.join("hermit-build.lock")).unwrap();
+		lock.lock().unwrap();
+
 		println!("cargo:warning=$ {cargo:?}");
 		let status = cargo.status().expect("failed to start kernel build");
 		assert!(status.success());
 
-		let lib_location = target_dir
-			.join(&arch)
-			.join(&profile)
-			.canonicalize()
-			.unwrap();
+		// The target dir is shared between feature sets, so link against a private copy.
+		let lib_location = out_dir();
+		fs::copy(
+			target_dir.join(&arch).join(&profile).join("libhermit.a"),
+			lib_location.join("libhermit.a"),
+		)
+		.unwrap();
+		drop(lock);
 
 		println!("cargo:rustc-link-search=native={}", lib_location.display());
 		println!("cargo:rustc-link-lib=static=hermit");
@@ -200,10 +208,16 @@ fn out_dir() -> PathBuf {
 	env::var_os("OUT_DIR").unwrap().into()
 }
 
+/// Kernel target dir, shared by all feature sets.
+///
+/// `OUT_DIR` is `<target>/<triple>/<profile>/build/hermit[-/]<hash>/out`, where the hash depends on the features.
 fn target_dir() -> PathBuf {
-	let mut target_dir = out_dir();
-	target_dir.push("target");
-	target_dir
+	let out_dir = out_dir();
+	let build_dir = out_dir
+		.ancestors()
+		.find(|dir| dir.file_name().is_some_and(|name| name == "build"))
+		.expect("OUT_DIR is not inside a `build` directory");
+	build_dir.parent().unwrap().join("hermit-kernel")
 }
 
 fn has_feature(feature: &str) -> bool {
