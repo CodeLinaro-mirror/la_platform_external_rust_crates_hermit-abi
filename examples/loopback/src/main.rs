@@ -1,7 +1,7 @@
 //! This example requires setting HERMIT_IP=127.0.0.1
 
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::thread;
 
 #[cfg(target_os = "hermit")]
@@ -17,23 +17,30 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-	let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 9975));
+	for addr in [
+		SocketAddr::from((Ipv4Addr::LOCALHOST, 9975)),
+		SocketAddr::from((Ipv6Addr::LOCALHOST, 9975)),
+	]
+	.into_iter()
+	{
+		let t = thread::spawn(move || -> io::Result<()> {
+			let mut client = TcpStream::connect(addr)?;
+			eprintln!("Client successfully connected");
+			client.write_all(TO_SEND)?;
+			let mut buf = [0u8; TO_SEND.len()];
+			client.read_exact(&mut buf)?;
+			assert_eq!(&buf, TO_SEND);
+			Ok(())
+		});
 
-	let t = thread::spawn(move || {
-		let mut client = TcpStream::connect(addr)?;
-		eprintln!("Client successfully connected");
-		client.write_all(TO_SEND)?;
-		let mut buf = [0u8; TO_SEND.len()];
-		client.read_exact(&mut buf)?;
-		assert_eq!(&buf, TO_SEND);
-		Ok(())
-	});
+		let listener = TcpListener::bind(addr)?;
+		eprintln!("Listening on {addr}");
+		let (socket, socket_addr) = listener.accept()?;
+		eprintln!("Accepted connection from {socket_addr}");
+		handle_client(socket)?;
 
-	let listener = TcpListener::bind(addr)?;
-	eprintln!("Listening on {addr}");
-	let (socket, socket_addr) = listener.accept()?;
-	eprintln!("Accepted connection from {socket_addr}");
-	handle_client(socket)?;
+		t.join().unwrap()?;
+	}
 
-	t.join().unwrap()
+	Ok(())
 }
